@@ -13,6 +13,7 @@ model User {
   password  String
   role      Role      @default(USER)
   orders    Order[]
+  cart      Cart?
   createdAt DateTime  @default(now()) 
 }
 
@@ -24,6 +25,7 @@ model Product {
   stock         Int       @default(0)
   category      String
   orderItems    OrderItem[]
+  cartItems     CartItem[]
   createdAt     DateTime  @default(now())
 }
 
@@ -45,6 +47,28 @@ model OrderItem {
   productId     Int
   quantity      Int
   price         Decimal
+}
+
+model Cart {
+  id            Int          @id @default(autoincrement())
+  user          User         @relation(fields: [userId], references: [id])
+  userId        Int          @unique
+  items         CartItem[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model CartItem {
+  id            Int           @id @default(autoincrement())
+  cart          Cart          @relation(fields: [cartId], references: [id])
+  cartId        Int           
+  product       Product       @relation(fields: [productId], references: [id])
+  productId     Int
+  quantity      Int           @default(1)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([cartId, productId])
 }
 
 enum Role {

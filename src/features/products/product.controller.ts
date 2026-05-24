@@ -77,3 +77,80 @@ export async function getCategories(
     next(error);
   }
 }
+
+export async function createProduct(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { name, description, price, stock, category } = req.body;
+
+    const product = await prisma.product.create({
+      data: { name, description, price, stock, category },
+    });
+
+    res.status(201).json({
+      message: "Product created successfully",
+      product: {
+        id: product.id,
+        name: product.name,
+        description: product.description,
+        price: product.price,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateProduct(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const product = await prisma.product.findUnique({
+      where: { id: parseInt(req.params.id as string) },
+    });
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    const updated = await prisma.product.update({
+      where: { id: parseInt(req.params.id as string) },
+      data: req.body,
+    });
+
+    res.status(200).json({
+      message: "Product updated successfully",
+      product: updated,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function deleteProduct(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const product = await prisma.product.findUnique({
+      where: { id: parseInt(req.params.id as string) },
+    });
+
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    await prisma.product.delete({
+      where: { id: parseInt(req.params.id as string) },
+    });
+
+    res.status(200).send();
+  } catch (error) {
+    next(error);
+  }
+}
