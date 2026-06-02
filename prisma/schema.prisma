@@ -35,6 +35,7 @@ model Order {
   userId        Int
   total         Decimal
   status        OrderStatus   @default(PENDING)
+  shippingAddress String
   items         OrderItem[]
   createdAt     DateTime      @default(now())
 }

@@ -3,9 +3,10 @@ import { JwtPayload, LoginBody, RegisterBody } from "./auth.types";
 import prisma from "../../db";
 import bcrypt from "bcrypt";
 import jwt, { SignOptions } from "jsonwebtoken";
+import { RegisterInput } from "./auth.schema";
 
 export async function register(
-  req: Request<{}, {}, RegisterBody>,
+  req: Request<{}, {}, RegisterInput>,
   res: Response,
   next: NextFunction,
 ) {
