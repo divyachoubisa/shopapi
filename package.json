@@ -5,10 +5,13 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "db:generate": "prisma generate"
+    "start": "node dist/src/index.js",
+    "seed": "tsx prisma/seed.ts"
   },
   "type": "module",
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
