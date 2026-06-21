@@ -1,5 +1,15 @@
 import { Request, Response, NextFunction } from "express";
 import prisma from "../../db";
+import {
+  CacheKeys,
+  CacheTTL,
+  deleteCache,
+  deleteCachePattern,
+  getCache,
+  setCache,
+} from "../../utils/cache";
+import { getPagination, getPaginationMeta } from "../../utils/pagination";
+import { serialize } from "../../utils/serializer";
 
 export async function getProducts(
   req: Request,
@@ -7,12 +17,17 @@ export async function getProducts(
   next: NextFunction,
 ) {
   try {
-    const {
-      category,
-      sort,
-      page = "1",
-      limit = "10",
-    } = req.query as Record<string, string>;
+    const queryString = JSON.stringify(req.query);
+    const cacheKey = CacheKeys.products(queryString);
+
+    const cached = await getCache(cacheKey);
+
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+    const { category, sort } = req.query as Record<string, string>;
+    const pagination = getPagination(req);
 
     const where = category ? { category } : {};
 
@@ -23,20 +38,24 @@ export async function getProducts(
           ? { price: "desc" as const }
           : { createdAt: "desc" as const };
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
     const [products, total] = await Promise.all([
-      prisma.product.findMany({ where, orderBy, skip, take: parseInt(limit) }),
+      prisma.product.findMany({
+        where,
+        orderBy,
+        skip: pagination.skip,
+        take: pagination.limit,
+      }),
       prisma.product.count({ where }),
     ]);
 
-    res.json({
-      products,
-      total,
-      page: parseInt(page),
-      limit: parseInt(limit),
-      totalPages: Math.ceil(total / parseInt(limit)),
+    const response = serialize({
+      data: products,
+      pagination: getPaginationMeta(total, pagination),
     });
+
+    await setCache(cacheKey, response, CacheTTL.products);
+
+    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -48,15 +67,29 @@ export async function getProductById(
   next: NextFunction,
 ) {
   try {
+    const id = parseInt(req.params.id as string);
+    const cacheKey = CacheKeys.product(id);
+
+    const cached = await getCache(cacheKey);
+
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
     const product = await prisma.product.findUnique({
-      where: { id: parseInt(req.params.id as string) },
+      where: { id },
     });
 
     if (!product) {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    res.status(200).json(product);
+    const response = serialize({ data: product });
+
+    await setCache(cacheKey, response, CacheTTL.product);
+
+    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -67,12 +100,24 @@ export async function getCategories(
   next: NextFunction,
 ) {
   try {
+    const cacheKey = CacheKeys.categories();
+
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
     const categories = await prisma.product.findMany({
       select: { category: true },
       distinct: ["category"],
     });
 
-    res.status(200).json(categories.map((c) => c.category));
+    const response = categories.map((c) => c.category);
+
+    await setCache(cacheKey, response, CacheTTL.categories);
+
+    res.json(response);
   } catch (error) {
     next(error);
   }
@@ -84,21 +129,12 @@ export async function createProduct(
   next: NextFunction,
 ) {
   try {
-    const { name, description, price, stock, category } = req.body;
-
     const product = await prisma.product.create({
-      data: { name, description, price, stock, category },
+      data: req.body,
     });
+    await deleteCachePattern("products:*");
 
-    res.status(201).json({
-      message: "Product created successfully",
-      product: {
-        id: product.id,
-        name: product.name,
-        description: product.description,
-        price: product.price,
-      },
-    });
+    res.status(201).json(serialize({ product }));
   } catch (error) {
     next(error);
   }
@@ -110,22 +146,26 @@ export async function updateProduct(
   next: NextFunction,
 ) {
   try {
+    const id = parseInt(req.params.id as string);
+
     const product = await prisma.product.findUnique({
-      where: { id: parseInt(req.params.id as string) },
+      where: { id },
     });
     if (!product) {
       return res.status(404).json({ message: "Product not found" });
     }
 
     const updated = await prisma.product.update({
-      where: { id: parseInt(req.params.id as string) },
+      where: { id },
       data: req.body,
     });
 
-    res.status(200).json({
-      message: "Product updated successfully",
-      product: updated,
-    });
+    await Promise.all([
+      deleteCache(CacheKeys.product(id)),
+      deleteCachePattern("products:*"),
+    ]);
+
+    res.json(serialize({ updated }));
   } catch (error) {
     next(error);
   }
@@ -137,8 +177,9 @@ export async function deleteProduct(
   next: NextFunction,
 ) {
   try {
+    const id = parseInt(req.params.id as string);
     const product = await prisma.product.findUnique({
-      where: { id: parseInt(req.params.id as string) },
+      where: { id },
     });
 
     if (!product) {
@@ -146,10 +187,15 @@ export async function deleteProduct(
     }
 
     await prisma.product.delete({
-      where: { id: parseInt(req.params.id as string) },
+      where: { id },
     });
 
-    res.status(200).send();
+    await Promise.all([
+      deleteCache(CacheKeys.product(id)),
+      deleteCachePattern("products:*"),
+    ]);
+
+    res.status(204).send();
   } catch (error) {
     next(error);
   }
