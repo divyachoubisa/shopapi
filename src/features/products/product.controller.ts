@@ -10,6 +10,7 @@ import {
 } from "../../utils/cache";
 import { getPagination, getPaginationMeta } from "../../utils/pagination";
 import { serialize } from "../../utils/serializer";
+import { generateEmbedding } from "../../lib/embeddings";
 
 export async function getProducts(
   req: Request,
@@ -132,6 +133,25 @@ export async function createProduct(
     const product = await prisma.product.create({
       data: req.body,
     });
+
+    generateEmbedding(
+      `${product.name}. ${product.description || ""}. Category: ${product.category}. This is a ${product.category} product.`,
+    )
+      .then(async (embedding) => {
+        const vectorString = `[${embedding.join(",")}]`;
+        await prisma.$executeRawUnsafe(
+          `UPDATE "Product" SET embedding = $1::vector WHERE id = $2`,
+          vectorString,
+          product.id,
+        );
+      })
+      .catch((err) => {
+        console.error(
+          `Error generating embedding for product ${product.name}:`,
+          err,
+        );
+      });
+
     await deleteCachePattern("products:*");
 
     res.status(201).json(serialize({ product }));
@@ -159,6 +179,24 @@ export async function updateProduct(
       where: { id },
       data: req.body,
     });
+
+    generateEmbedding(
+      `${updated.name}. ${updated.description || ""}. Category: ${updated.category}. This is a ${updated.category} product.`,
+    )
+      .then(async (embedding) => {
+        const vectorString = `[${embedding.join(",")}]`;
+        await prisma.$executeRawUnsafe(
+          `UPDATE "Product" SET embedding = $1::vector WHERE id = $2`,
+          vectorString,
+          updated.id,
+        );
+      })
+      .catch((err) => {
+        console.error(
+          `Error generating embedding for product ${updated.name}:`,
+          err,
+        );
+      });
 
     await Promise.all([
       deleteCache(CacheKeys.product(id)),
@@ -198,5 +236,53 @@ export async function deleteProduct(
     res.status(204).send();
   } catch (error) {
     next(error);
+  }
+}
+
+export async function searchProducts(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const query = req.query.q as string;
+
+    if (!query || query.trim().length === 0) {
+      res.status(400).json({ error: "Search query is required" });
+      return;
+    }
+
+    const queryEmbedding = await generateEmbedding(query.trim());
+    console.log("Embedding length:", queryEmbedding.length);
+
+    const vectorString = `[${queryEmbedding.join(",")}]`;
+    console.log("Vector string preview:", vectorString.slice(0, 50));
+
+    const results = await prisma.$queryRawUnsafe<
+      Array<{
+        id: number;
+        name: string;
+        description: string | null;
+        price: any;
+        stock: number;
+        category: string;
+        similarity: number;
+      }>
+    >(
+      `SELECT id, name, description, price, stock, category,
+              1 - (embedding <=> $1::vector) AS similarity
+           FROM "Product"
+           WHERE embedding IS NOT NULL
+           AND 1 - (embedding <=> $1::vector) > 0.45
+           ORDER BY embedding <=> $1::vector
+           LIMIT 10`,
+      vectorString,
+    );
+
+    console.log("Results count:", results.length);
+    res.json(serialize({ query, data: results }));
+  } catch (err) {
+    console.error("Search error:", err);
+    next(err);
   }
 }

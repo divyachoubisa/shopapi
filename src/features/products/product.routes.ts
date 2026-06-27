@@ -6,6 +6,7 @@ import {
   createProduct,
   deleteProduct,
   updateProduct,
+  searchProducts,
 } from "./product.controller";
 import { protect, requireAdmin } from "../../middlewares/auth.middleware";
 import { validate } from "../../middlewares/validate.middleware";
@@ -16,6 +17,7 @@ const router = Router();
 // public routes
 router.get("/", getProducts);
 router.get("/categories", getCategories);
+router.get("/search", searchProducts);
 router.get("/:id", getProductById);
 
 // protected routes

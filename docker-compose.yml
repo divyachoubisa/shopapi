@@ -17,7 +17,7 @@ services:
         condition: service_started
 
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -32,13 +32,29 @@ services:
       timeout: 5s
       retries: 5
 
+  db_shadow:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shopapi_shadow
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_shadow_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-
 volumes:
   postgres_data:
+  postgres_shadow_data:
   redis_data:
