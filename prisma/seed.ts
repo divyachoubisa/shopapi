@@ -1,14 +1,13 @@
-import "dotenv/config";
 import bcrypt from "bcrypt";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-
+import { env } from "../src/config/env";
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
+  adapter: new PrismaPg({ connectionString: env.databaseUrl }),
 });
 
 async function main() {
-  const adminEmail = process.env.ADMIN_EMAIL ?? "admin@shopapi.com";
+  const adminEmail = env.adminEmail ?? "admin@shopapi.com";
   const adminPassword = "admin123";
 
   await prisma.user.upsert({

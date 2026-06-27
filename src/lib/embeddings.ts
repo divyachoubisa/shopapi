@@ -1,8 +1,8 @@
-import "dotenv/config";
+import { env } from "../config/env";
 
-const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
-const HF_API_KEY = process.env.HUGGINGFACE_API_KEY || "";
-const EMBEDDING_PROVIDER = process.env.EMBEDDING_PROVIDER || "ollama";
+const OLLAMA_URL = env.ollamaUrl || "http://localhost:11434";
+const HF_API_KEY = env.hfApiKey || "";
+const EMBEDDING_PROVIDER = env.embeddingProvider || "ollama";
 
 const OLLAMA_MODEL = "nomic-embed-text";
 const HF_MODEL = "sentence-transformers/all-mpnet-base-v2";

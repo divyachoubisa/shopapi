@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { JwtPayload } from "jsonwebtoken";
 import jwt from "jsonwebtoken";
-
+import { env } from "../config/env";
 declare global {
   namespace Express {
     interface Request {
@@ -18,7 +18,7 @@ export function protect(req: Request, res: Response, next: NextFunction) {
     }
 
     const token = header.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+    const decoded = jwt.verify(token, env.jwtSecret) as JwtPayload;
 
     req.user = decoded;
     next();

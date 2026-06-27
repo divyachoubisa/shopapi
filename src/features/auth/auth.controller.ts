@@ -4,6 +4,7 @@ import prisma from "../../db";
 import bcrypt from "bcrypt";
 import jwt, { SignOptions } from "jsonwebtoken";
 import { RegisterInput } from "./auth.schema";
+import { env } from "../../config/env";
 
 export async function register(
   req: Request<{}, {}, RegisterInput>,
@@ -22,7 +23,7 @@ export async function register(
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const role = email === process.env.ADMIN_EMAIL ? "ADMIN" : "USER";
+    const role = email === env.adminEmail ? "ADMIN" : "USER";
 
     const user = await prisma.user.create({
       data: { name, email, password: hashedPassword, role },
@@ -67,11 +68,10 @@ export async function login(
       role: user.role,
     };
     const signOptions: SignOptions = {
-      expiresIn: (process.env.JWT_EXPIRES_IN ??
-        "7d") as SignOptions["expiresIn"],
+      expiresIn: (env.jwtExpiresIn ?? "7d") as SignOptions["expiresIn"],
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET!, signOptions);
+    const token = jwt.sign(payload, env.jwtSecret, signOptions);
 
     res.status(200).json({
       message: "Login successful",
