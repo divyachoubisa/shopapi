@@ -273,7 +273,7 @@ export async function searchProducts(
               1 - (embedding <=> $1::vector) AS similarity
            FROM "Product"
            WHERE embedding IS NOT NULL
-           AND 1 - (embedding <=> $1::vector) > 0.3
+           AND 1 - (embedding <=> $1::vector) > 0.2
            ORDER BY embedding <=> $1::vector
            LIMIT 10`,
       vectorString,
