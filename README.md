@@ -1,512 +1,288 @@
 # ShopAPI
 
-A RESTful e-commerce backend built with **Node.js**, **Express**, **PostgreSQL**, **Prisma**, and **Redis**. Supports user authentication, product catalog with caching, shopping cart, and order management with admin controls.
+A production-grade e-commerce REST API built with Node.js, TypeScript, and PostgreSQL. Features JWT authentication, persistent cart and order management with database transactions, Redis caching, and AI-powered semantic product search using vector embeddings.
+
+**Live API:** https://shopapi-production-129d.up.railway.app
+
+---
+
+## Tech stack
+
+| Technology                | Role                   | Why                                             |
+| ------------------------- | ---------------------- | ----------------------------------------------- |
+| Node.js + Express         | HTTP server            | Lightweight, non-blocking I/O                   |
+| TypeScript                | Language               | Type safety, better DX                          |
+| PostgreSQL + Prisma       | Primary database + ORM | Relational data, type-safe queries              |
+| Redis (Memurai)           | Caching                | Sub-millisecond product listing                 |
+| pgvector                  | Vector search          | Semantic search without a separate vector DB    |
+| Cohere API                | Embeddings             | Free tier, 1024-dim embeddings for production   |
+| Ollama + nomic-embed-text | Local embeddings       | Free, offline embeddings for development        |
+| Zod                       | Validation             | Schema-first validation with inferred types     |
+| JWT                       | Authentication         | Stateless auth with role-based access           |
+| Docker + Docker Compose   | Containerization       | One-command local setup                         |
+| Railway                   | Deployment             | Native Docker support, managed Postgres + Redis |
+
+---
 
 ## Features
 
-- JWT authentication with role-based access (`USER`, `ADMIN`)
-- Product catalog with pagination, filtering, sorting, and Redis caching
-- Shopping cart (add, update, remove, clear)
-- Order placement with shipping address and stock validation
-- Admin order management and product CRUD
-- Request validation with Zod
-- Centralized error handling (Prisma, JWT, validation errors)
-- Docker Compose setup for app, PostgreSQL, and Redis
+### Authentication & authorization
 
-## Tech Stack
+- Register and login with JWT tokens
+- Role-based access control — `USER` and `ADMIN` roles
+- Admin auto-assigned via `ADMIN_EMAIL` environment variable
+- Admin promotion endpoint — admins can promote other users
+- Password hashing with bcrypt
 
-| Layer            | Technology              |
-| ---------------- | ----------------------- |
-| Runtime          | Node.js 22              |
-| Framework        | Express 5               |
-| Language         | TypeScript              |
-| Database         | PostgreSQL 16           |
-| ORM              | Prisma 7                |
-| Cache            | Redis 7 (ioredis)       |
-| Auth             | JWT + bcrypt            |
-| Validation       | Zod                     |
-| Containerization | Docker & Docker Compose |
+### Products
 
-## Prerequisites
+- Browse with filtering by category, sorting by price, and pagination
+- Category listing endpoint
+- Admin-only create, update, and delete
+- Redis cache on listing and detail endpoints with automatic invalidation on mutation
 
-Choose **one** setup path below.
+### Cart
 
-### For Docker (recommended)
+- Persistent cart stored in PostgreSQL — survives logout and works across devices
+- Add items, update quantity, remove items, clear cart
+- Stock validation on every operation
+- Automatic cart merge for duplicate products
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+### Orders
 
-### For local development
+- Place an order from the current cart using a **database transaction** — atomically creates the order, reduces stock for every product, and clears the cart in a single operation. If any step fails, everything rolls back.
+- Cancel pending orders with automatic stock restoration (also transactional)
+- Order history with pagination
+- Admin order management — view all orders, update status through the full lifecycle
 
-- [Node.js](https://nodejs.org/) 22+
-- PostgreSQL 16+
-- Redis 7+ (optional — API runs without it, caching is disabled)
+### AI semantic search
+
+- Natural language product search — "something for college work" returns laptops, "music without disturbing others" returns headphones
+- Embeddings generated at product creation and stored in PostgreSQL via pgvector
+- HNSW index for fast approximate nearest-neighbour search
+- Provider-agnostic embedding layer — Ollama locally, Cohere in production, switchable via environment variable
 
 ---
 
-## Quick Start with Docker
+## Architecture decisions
 
-This is the fastest way to run the full stack.
+**Why pgvector instead of Pinecone or a dedicated vector database?**
+Products already live in PostgreSQL. pgvector adds vector storage and similarity search as a native extension — no second system to manage, no syncing, no extra cost. Most importantly, vector search can be combined with ordinary SQL filters (category, stock, price) in a single query. This is significantly harder with a dedicated vector database. At the scale of this project (thousands of products, not hundreds of millions), pgvector performs identically to purpose-built alternatives.
 
-### Step 1 — Clone the repository
+**Why database transactions for orders?**
+Placing an order is a multi-step write operation: create the order record, create order items, reduce stock for every product, and clear the cart. If any step fails after others have succeeded, the database is left in an inconsistent state — an order exists but stock was never reduced, or stock was reduced but the order was never confirmed. Wrapping all steps in a Prisma transaction guarantees atomicity: either everything succeeds or everything rolls back, with no partial state possible.
+
+**Why Redis caching on products?**
+Product listing is the most frequently hit endpoint and the most expensive — it runs a COUNT query alongside a paginated SELECT, both hitting the database. Caching the response in Redis for 5 minutes eliminates repeated database load for identical requests. Cache keys are built from the full query string so different filters cache independently. Any mutation (create, update, delete) invalidates all product list caches immediately via key pattern deletion.
+
+**Why a provider-agnostic embedding layer?**
+Embedding providers differ in cost, availability, and dimension count. Hardcoding one provider couples the application to that vendor's availability and pricing. The `generateEmbedding()` abstraction lets the provider switch via a single environment variable — Ollama for free offline development, Cohere for production — without any controller or route code changing.
+
+---
+
+## Local setup
+
+### Prerequisites
+
+- Node.js 20+
+- Docker Desktop
+- Ollama (for local AI search) — download from ollama.com
+
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/divyachoubisa/shopapi.git
+git clone git@github-personal:divyachoubisa/shopapi.git
 cd shopapi
-```
-
-### Step 2 — Create environment file
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set a strong `JWT_SECRET`. Docker Compose overrides `DATABASE_URL` and `REDIS_URL` for the app container automatically.
-
-### Step 3 — Start all services
-
-```bash
-docker compose up --build
-```
-
-Wait until you see:
-
-```text
-Redis connected
-Server running on http://localhost:3000
-```
-
-### Step 4 — Seed the database
-
-In a new terminal:
-
-```bash
-docker compose exec app npx prisma db seed
-```
-
-Default seeded accounts:
-
-| Role  | Email               | Password   |
-| ----- | ------------------- | ---------- |
-| Admin | `admin@shopapi.com` | `admin123` |
-| User  | `user@shopapi.com`  | `user123`  |
-
-### Step 5 — Verify the API
-
-```bash
-curl http://localhost:3000/
-curl http://localhost:3000/products
-```
-
-### Docker commands reference
-
-```bash
-# Start in background
-docker compose up --build -d
-
-# View logs
-docker compose logs -f app
-
-# Stop all services
-docker compose down
-
-# Stop and remove volumes (fresh database)
-docker compose down -v
-
-# Run migrations inside container
-docker compose exec app npx prisma migrate deploy
-
-# Seed database inside container
-docker compose exec app npx prisma db seed
-
-# Open Redis CLI inside container
-docker compose exec redis redis-cli keys "products:*"
-```
-
----
-
-## Local Development Setup
-
-Use this when developing outside Docker.
-
-### Step 1 — Install dependencies
-
-```bash
 npm install
 ```
 
-### Step 2 — Configure environment
+### 2. Copy environment variables
 
 ```bash
 cp .env.example .env
 ```
 
-Update `.env` for your local services:
+Fill in your values — see the [Environment variables](#environment-variables) section below.
 
-```env
-DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/shopapi"
-REDIS_URL=redis://127.0.0.1:6379
-JWT_SECRET=your-long-random-secret
-JWT_EXPIRES_IN=7d
-ADMIN_EMAIL=admin@shopapi.com
-PORT=3000
-```
-
-> Use `127.0.0.1` instead of `localhost` for Redis on Windows to avoid IPv4/IPv6 mismatches.
-
-### Step 3 — Start PostgreSQL
-
-Create a database named `shopapi`, then run migrations:
+### 3. Start infrastructure
 
 ```bash
+docker compose up -d
+```
+
+This starts PostgreSQL (with pgvector), a shadow PostgreSQL for Prisma migrations, and Redis. Your Node.js app runs outside Docker in development.
+
+### 4. Enable pgvector and run migrations
+
+```bash
+# enable extension
+docker compose exec db psql -U postgres -d shopapi -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker compose exec db_shadow psql -U postgres -d shopapi_shadow -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# run migrations
 npx prisma migrate dev
+
+# add the embedding column (not managed by Prisma)
+docker compose exec db psql -U postgres -d shopapi -c "ALTER TABLE \"Product\" ADD COLUMN IF NOT EXISTS embedding vector(768);"
 ```
 
-Generate the Prisma client after schema changes:
-
-```bash
-npm run db:generate
-# or: npx prisma generate
-```
-
-### Step 4 — Start Redis (optional)
-
-**Docker:**
-
-```bash
-docker run -d --name shopapi-redis -p 6379:6379 redis:7-alpine
-```
-
-**Verify:**
-
-```bash
-docker exec -it shopapi-redis redis-cli ping
-# PONG
-```
-
-If Redis is not running, the API still starts with: `Redis unavailable — caching disabled`.
-
-### Step 5 — Seed the database
+### 5. Seed the database
 
 ```bash
 npm run seed
-# or: npx prisma db seed
 ```
 
-### Step 6 — Start the dev server
+This creates 10 sample products and an admin account using the `ADMIN_EMAIL` from your `.env`.
+
+### 6. Pull the embedding model (for AI search)
+
+```bash
+ollama pull nomic-embed-text
+```
+
+### 7. Generate embeddings for seeded products
+
+```bash
+npm run backfill
+```
+
+### 8. Start the server
 
 ```bash
 npm run dev
 ```
 
-API available at **http://localhost:3000**
-
-> Do not run `npm run dev` and `docker compose up` at the same time — both use port 3000.
+Server runs at `http://localhost:3000`.
 
 ---
 
-## Environment Variables
+## API documentation
 
-| Variable         | Description                                   | Example                                             |
-| ---------------- | --------------------------------------------- | --------------------------------------------------- |
-| `DATABASE_URL`   | PostgreSQL connection string                  | `postgresql://postgres:pass@localhost:5432/shopapi` |
-| `REDIS_URL`      | Redis connection string                       | `redis://127.0.0.1:6379`                            |
-| `JWT_SECRET`     | Secret for signing JWT tokens                 | long random string                                  |
-| `JWT_EXPIRES_IN` | Token expiry                                  | `7d`                                                |
-| `ADMIN_EMAIL`    | Email that gets `ADMIN` role on register/seed | `admin@shopapi.com`                                 |
-| `PORT`           | Server port                                   | `3000`                                              |
+### Auth
 
-Copy [`.env.example`](.env.example) to `.env` and fill in your values. Never commit `.env` to Git.
-
----
-
-## NPM Scripts
-
-| Command               | Description                      |
-| --------------------- | -------------------------------- |
-| `npm run dev`         | Start dev server with hot reload |
-| `npm run build`       | Compile TypeScript to `dist/`    |
-| `npm start`           | Run compiled production build    |
-| `npm run seed`        | Seed database with sample data   |
-| `npm run db:generate` | Regenerate Prisma client         |
-
----
-
-## Database
-
-### Migrations
-
-```bash
-# Create and apply a new migration (local dev)
-npx prisma migrate dev --name your_migration_name
-
-# Apply migrations (production / Docker)
-npx prisma migrate deploy
-```
-
-### Seed
-
-Configured in [`prisma.config.ts`](prisma.config.ts):
-
-```ts
-migrations: {
-  seed: "tsx prisma/seed.ts",
-}
-```
-
-```bash
-npx prisma db seed
-```
-
-### Prisma Studio (optional GUI)
-
-```bash
-npx prisma studio
-```
-
----
-
-## Redis Caching
-
-Product endpoints are cached in Redis:
-
-| Key pattern           | TTL    | Endpoint                   |
-| --------------------- | ------ | -------------------------- |
-| `products:*`          | 5 min  | `GET /products`            |
-| `product:{id}`        | 10 min | `GET /products/:id`        |
-| `products:categories` | 1 hour | `GET /products/categories` |
-
-Cache is invalidated when products are created, updated, or deleted.
-
----
-
-## API Reference
-
-Base URL: `http://localhost:3000`
-
-Protected routes require header:
-
-```http
-Authorization: Bearer <token>
-```
-
-### Health
-
-| Method | Endpoint | Auth   | Description  |
-| ------ | -------- | ------ | ------------ |
-| GET    | `/`      | Public | Health check |
-
-### Auth — `/auth`
-
-| Method | Endpoint                | Auth   | Description           |
+| Method | Path                    | Auth   | Description           |
 | ------ | ----------------------- | ------ | --------------------- |
-| POST   | `/auth/register`        | Public | Register a new user   |
-| POST   | `/auth/login`           | Public | Login and receive JWT |
+| POST   | `/auth/register`        | Public | Create account        |
+| POST   | `/auth/login`           | Public | Login, returns JWT    |
 | PATCH  | `/auth/promote/:userId` | Admin  | Promote user to admin |
 
-**Register / Login body:**
+### Products
 
-```json
-{
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "password123"
-}
-```
+| Method | Path                   | Auth   | Description                            |
+| ------ | ---------------------- | ------ | -------------------------------------- |
+| GET    | `/products`            | Public | List products (filter, sort, paginate) |
+| GET    | `/products/categories` | Public | List all categories                    |
+| GET    | `/products/search?q=`  | Public | AI semantic search                     |
+| GET    | `/products/:id`        | Public | Get single product                     |
+| POST   | `/products`            | Admin  | Create product                         |
+| PATCH  | `/products/:id`        | Admin  | Update product                         |
+| DELETE | `/products/:id`        | Admin  | Delete product                         |
 
-Login only requires `email` and `password`.
+**Product query params:**
 
-### Products — `/products`
+- `?category=laptops` — filter by category
+- `?sort=price_asc` or `?sort=price_desc` — sort by price
+- `?page=2&limit=10` — pagination (limit capped at 100)
+- `?q=something for college work` — natural language search
 
-| Method | Endpoint               | Auth   | Description               |
-| ------ | ---------------------- | ------ | ------------------------- |
-| GET    | `/products`            | Public | List products (paginated) |
-| GET    | `/products/categories` | Public | List categories           |
-| GET    | `/products/:id`        | Public | Get product by ID         |
-| POST   | `/products`            | Admin  | Create product            |
-| PATCH  | `/products/:id`        | Admin  | Update product            |
-| DELETE | `/products/:id`        | Admin  | Delete product            |
+### Cart
 
-**Query params for `GET /products`:**
+All cart endpoints require a valid JWT token.
 
-- `page` — page number (default: 1)
-- `limit` — items per page (default: 10)
-- `category` — filter by category
-- `sort` — `price_asc`, `price_desc`, or default by date
+| Method | Path        | Description                         |
+| ------ | ----------- | ----------------------------------- |
+| GET    | `/cart`     | View cart with total                |
+| POST   | `/cart`     | Add item `{ productId, quantity }`  |
+| PATCH  | `/cart/:id` | Update item quantity `{ quantity }` |
+| DELETE | `/cart/:id` | Remove item                         |
+| DELETE | `/cart`     | Clear entire cart                   |
 
-**Create product body:**
+### Orders
 
-```json
-{
-  "name": "Wireless Mouse",
-  "description": "Ergonomic design",
-  "price": 49.99,
-  "stock": 100,
-  "category": "accessories"
-}
-```
+All order endpoints require a valid JWT token.
 
-### Cart — `/cart`
+| Method | Path                              | Auth  | Description                       |
+| ------ | --------------------------------- | ----- | --------------------------------- |
+| POST   | `/orders`                         | User  | Place order from cart             |
+| GET    | `/orders`                         | User  | My order history                  |
+| GET    | `/orders/:id`                     | User  | Single order                      |
+| PATCH  | `/orders/:id/cancel`              | User  | Cancel pending order              |
+| GET    | `/orders/admin/orders`            | Admin | All orders (filterable by status) |
+| PATCH  | `/orders/admin/orders/:id/status` | Admin | Update order status               |
 
-All cart routes require authentication.
-
-| Method | Endpoint    | Description               |
-| ------ | ----------- | ------------------------- |
-| GET    | `/cart`     | Get current user's cart   |
-| POST   | `/cart`     | Add item to cart          |
-| PATCH  | `/cart/:id` | Update cart item quantity |
-| DELETE | `/cart/:id` | Remove item from cart     |
-| DELETE | `/cart`     | Clear entire cart         |
-
-**Add to cart body:**
-
-```json
-{
-  "productId": 1,
-  "quantity": 2
-}
-```
-
-### Orders — `/orders`
-
-All order routes require authentication.
-
-| Method | Endpoint                          | Auth  | Description           |
-| ------ | --------------------------------- | ----- | --------------------- |
-| POST   | `/orders`                         | User  | Place order from cart |
-| GET    | `/orders`                         | User  | List my orders        |
-| GET    | `/orders/:id`                     | User  | Get order by ID       |
-| PATCH  | `/orders/:id/cancel`              | User  | Cancel pending order  |
-| GET    | `/orders/admin/orders`            | Admin | List all orders       |
-| PATCH  | `/orders/admin/orders/:id/status` | Admin | Update order status   |
-
-**Place order body:**
-
-```json
-{
-  "shippingAddress": "123 Main Street, City, Country 12345"
-}
-```
-
-**Update order status body:**
-
-```json
-{
-  "status": "SHIPPED"
-}
-```
-
-Valid statuses: `PENDING`, `CONFIRMED`, `SHIPPED`, `DELIVERED`, `CANCELLED`
+**Order status flow:** `PENDING` → `CONFIRMED` → `SHIPPED` → `DELIVERED` (or `CANCELLED` from `PENDING`)
 
 ---
 
-## Example Workflow
+## Environment variables
 
-```bash
-# 1. Login
-curl -X POST http://localhost:3000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@shopapi.com","password":"user123"}'
+| Variable              | Description                                     | Example                                                    |
+| --------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
+| `DATABASE_URL`        | PostgreSQL connection string                    | `postgresql://postgres:pass@localhost:5432/shopapi`        |
+| `SHADOW_DATABASE_URL` | Prisma shadow database (dev only)               | `postgresql://postgres:pass@localhost:5433/shopapi_shadow` |
+| `REDIS_URL`           | Redis connection string                         | `redis://127.0.0.1:6379`                                   |
+| `JWT_SECRET`          | Secret for signing JWT tokens                   | 64-byte hex string                                         |
+| `JWT_EXPIRES_IN`      | Token expiry                                    | `7d`                                                       |
+| `ADMIN_EMAIL`         | Email that auto-receives ADMIN role on register | `admin@yourdomain.com`                                     |
+| `EMBEDDING_PROVIDER`  | `ollama` for local, `cohere` for production     | `ollama`                                                   |
+| `OLLAMA_URL`          | Ollama server URL (local only)                  | `http://127.0.0.1:11434`                                   |
+| `COHERE_API_KEY`      | Cohere API key (production only)                | `co-...`                                                   |
+| `PORT`                | Server port                                     | `3000`                                                     |
 
-# 2. Browse products
-curl http://localhost:3000/products
+---
 
-# 3. Add to cart (replace TOKEN)
-curl -X POST http://localhost:3000/cart \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer TOKEN" \
-  -d '{"productId":1,"quantity":1}'
+## Project structure
 
-# 4. Place order
-curl -X POST http://localhost:3000/orders \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer TOKEN" \
-  -d '{"shippingAddress":"123 Main Street, London, UK"}'
+```
+src/
+├── config/
+│   └── env.ts                  # centralised env variable access
+├── features/
+│   ├── auth/
+│   │   ├── auth.controller.ts
+│   │   ├── auth.routes.ts
+│   │   └── auth.schema.ts
+│   ├── products/
+│   │   ├── product.controller.ts
+│   │   ├── product.routes.ts
+│   │   └── product.schema.ts
+│   ├── cart/
+│   │   ├── cart.controller.ts
+│   │   ├── cart.routes.ts
+│   │   └── cart.schema.ts
+│   └── orders/
+│       ├── order.controller.ts
+│       ├── order.routes.ts
+│       └── order.schema.ts
+├── lib/
+│   ├── embeddings.ts           # provider-agnostic embedding layer
+│   └── redis.ts                # Redis client
+├── middlewares/
+│   ├── auth.middleware.ts      # JWT verification + role check
+│   ├── validate.middleware.ts  # Zod request validation
+│   ├── error.middleware.ts     # global error handler
+│   └── notFound.middleware.ts  # 404 handler
+├── scripts/
+│   └── backfill-embeddings.ts  # one-time embedding generation
+├── utils/
+│   ├── cache.ts                # Redis cache helpers
+│   ├── pagination.ts           # reusable pagination logic
+│   └── serializer.ts           # Decimal → number conversion
+├── db.ts                       # Prisma client
+└── index.ts                    # Express app entry point
+prisma/
+├── schema.prisma               # database schema
+├── migrations/                 # migration history
+└── seed.ts                     # sample data
 ```
 
 ---
 
-## Project Structure
+## Credentials for testing
 
-```text
-shopapi/
-├── prisma/
-│   ├── migrations/       # Database migrations
-│   ├── schema.prisma     # Database schema
-│   └── seed.ts           # Seed script
-├── src/
-│   ├── features/
-│   │   ├── auth/         # Authentication
-│   │   ├── products/     # Product catalog
-│   │   ├── cart/         # Shopping cart
-│   │   └── orders/       # Orders
-│   ├── lib/
-│   │   └── redis.ts      # Redis client
-│   ├── middlewares/    # Auth, validation, errors
-│   ├── utils/            # Cache, pagination, serializer
-│   ├── db.ts             # Prisma client
-│   └── index.ts          # App entry point
-├── docker-compose.yml
-├── Dockerfile
-├── prisma.config.ts
-└── .env.example
-```
+The seed script creates two accounts:
 
----
-
-## Troubleshooting
-
-### `prisma` command not found
-
-Use npx or npm scripts:
-
-```bash
-npx prisma generate
-npm run db:generate
-```
-
-### Port 6379 already in use
-
-Another Redis instance (Docker container, Memurai, WSL) is running:
-
-```bash
-docker ps                          # find conflicting container
-docker stop shopapi-redis          # stop standalone container
-docker compose up --build        # use compose Redis instead
-```
-
-### Redis keys appear empty in CLI
-
-On Windows, `redis-cli` may connect to IPv4 while the app uses IPv6:
-
-```bash
-redis-cli -h 127.0.0.1 keys "products:*"   # Docker Redis
-docker compose exec redis redis-cli keys "products:*"
-```
-
-### Docker app can't reach database
-
-Inside Docker, use service names — not `localhost`:
-
-- Database host: `db`
-- Redis host: `redis`
-
-These are configured in [`docker-compose.yml`](docker-compose.yml).
-
-### TypeScript errors after schema change
-
-Run both after editing `schema.prisma`:
-
-```bash
-npx prisma migrate dev
-npx prisma generate
-```
-
-### Memurai won't start on Windows
-
-Port 6379 is likely taken by Docker Redis. Use Docker Redis instead or stop the conflicting service.
-
----
-
-## License
-
-ISC
+| Role  | Email             | Password |
+| ----- | ----------------- | -------- |
+| Admin | admin@shopapi.com | admin123 |
+| User  | user@shopapi.com  | user123  |
