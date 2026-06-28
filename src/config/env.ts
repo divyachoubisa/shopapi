@@ -16,4 +16,5 @@ export const env = {
   ollamaUrl: process.env.OLLAMA_URL || "http://127.0.0.1:11434",
   hfApiKey: process.env.HUGGINGFACE_API_KEY || "",
   port: parseInt(process.env.PORT || "3000"),
+  cohereApiKey: process.env.COHERE_API_KEY || "",
 };
